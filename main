@@ -1,0 +1,71 @@
+pip install PyPDF2 pdfplumber PyMuPDF
+import pdfplumber
+import pandas as pd
+import re
+import os
+
+pasta_pdfs = "pdfs/"
+
+arquivos_pdf = [f for f in os.listdir(pasta_pdfs) if f.endswith(".pdf")]
+
+dados_compilados = []
+
+for arquivo_pdf in arquivos_pdf:
+    caminho_pdf = os.path.join(pasta_pdfs, arquivo_pdf)
+    numero_poco = None
+    data_coleta = None
+    data_analise = None
+
+    with pdfplumber.open(caminho_pdf) as pdf:
+        for pagina in pdf.pages:
+            texto_pagina = pagina.extract_text()
+
+            for linha in texto_pagina.split("\n"):
+                # Caso 1: "Poço 2", "Poço 02", "Saída Poço 02", etc.
+                match_poco = re.search(r'(?:Saída\s*)?Poço\s*0*(\d+)', linha, re.IGNORECASE)
+                if match_poco:
+                    numero_poco = f"Poço {match_poco.group(1)}"
+
+                # Caso 2: "Saída do tratamento"
+                if "Saída do tratamento" in linha and not numero_poco:
+                    numero_poco = "ETA - Saída do tratamento"
+
+               
+                match_data_coleta = re.search(r'Data\s*Coleta[:\-]?\s*(\d{2}/\d{2}/\d{4})', linha, re.IGNORECASE)
+                if match_data_coleta:
+                    data_coleta = match_data_coleta.group(1)
+
+                match_data_analise = re.search(r'Data\s*An[aá]lise[:\-]?\s*(\d{2}/\d{2}/\d{4})', linha, re.IGNORECASE)
+                if match_data_analise:
+                    data_analise = match_data_analise.group(1)
+
+            tabelas = pagina.extract_tables()
+            for tabela in tabelas:
+                for linha in tabela:
+                    if any(re.search(r'\d{2}/\d{2}/\d{4}', str(celula)) for celula in linha):
+                        for celula in linha:
+                            if re.match(r'\d{2}/\d{2}/\d{4}', str(celula)):
+                                data_analise = celula
+
+                    if (
+                        len(linha) > 2 and
+                        linha[0] and
+                        linha[2] and
+                        any(char.isdigit() for char in str(linha[2])) and
+                        linha[0] not in ["Análise", "Resultado"] and
+                        linha[2] != "LQ"
+                    ):
+                        linha_completa = linha[:4] + [numero_poco, data_coleta, data_analise]
+                        dados_compilados.append(linha_completa)
+
+colunas_esperadas = ["Análise", "Resultado", "Portaria GM/MS Nº 888", "LQ", "Nº Poço", "Data da Coleta", "Data da Análise"]
+df = pd.DataFrame(dados_compilados, columns=colunas_esperadas)
+
+df = df.dropna(subset=["Análise"])
+df["Análise"] = df["Análise"].astype(str)
+df = df.sort_values(by="Análise")
+
+arquivo_saida = "dados_poco.xlsx"
+df.to_excel(arquivo_saida, sheet_name="Todos_Elementos", index=False)
+
+print(f"Os dados foram salvos no arquivo {arquivo_saida}, com todos os elementos na mesma planilha.")
